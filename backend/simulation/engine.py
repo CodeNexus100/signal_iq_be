@@ -74,8 +74,14 @@ class SimulationEngine:
                 continue
                 
             intersection.timer -= dt
+            intersection.timer -= dt
             if intersection.timer <= 0:
-                self._switch_signal_phase(intersection)
+                # Check if intersection is clear before switching
+                if not self._is_intersection_blocked(intersection):
+                    self._switch_signal_phase(intersection)
+                else:
+                    # Hold phase, check again soon
+                    intersection.timer = 0.5
 
     def _calculate_density(self, intersection_id: str):
         # Map I-101 (index 1) to row 0, col 0
@@ -113,6 +119,66 @@ class SimulationEngine:
 
         except Exception:
             return 0, 0
+
+    def _is_intersection_blocked(self, intersection: Intersection) -> bool:
+        # 1. Emergency Vehicle Check
+        if self.emergency_vehicle and self.emergency_vehicle.active:
+            # If EV is targeting this intersection, BLOCK switches (keep it GREEN)
+            # Find index of this intersection in route
+            try:
+                if intersection.id in self.emergency_vehicle.route:
+                     # It's on the route. Is it the current target?
+                     # If previous target, maybe EV hasn't cleared it yet?
+                     # We check distance.
+                     
+                     # Get Intersection Position
+                     if "H" in self.emergency_vehicle.laneId:
+                         # Simulation is H-lane based for EV currently
+                         col = int(intersection.id.split("-")[1]) - 101 # 0..4
+                         col = col % 5
+                         int_pos = col * 100.0
+                     else:
+                         int_pos = 0.0 # TODO: support other EV paths
+                     
+                     dist = int_pos - self.emergency_vehicle.position
+                     
+                     
+                     # Block if approaching (0 < dist < 150) or just inside (-30 < dist < 30)
+                     if -40.0 < dist < 150.0:
+                         return True
+            except Exception:
+                pass
+
+        # 2. Vehicle Clearance Check (Don't switch if someone is IN the box)
+        # Iterate all vehicles? Optimization: Map vehicles to grid cells?
+        # For 50 vehicles, iteration is fine.
+        
+        # Get intersection center coordinates
+        idx = int(intersection.id.split("-")[1]) - 101
+        row = idx // 5
+        col = idx % 5
+        center_h = col * 100.0
+        center_v = row * 100.0
+        
+        radius = 25.0 # Intersection box radius
+        
+        for v in self.vehicles:
+            # Check proximity
+            if v.laneType == "horizontal":
+                 # On H lane (Row), pos is along H-axis (Col)
+                 # Is this vehicle on the correct ROW?
+                 v_row = int(v.laneId[1:])
+                 if v_row == row:
+                     if abs(v.position - center_h) < radius:
+                         return True # Blocked by Horizontal traffic
+            else:
+                 # On V lane (Col), pos is along V-axis (Row)
+                 v_col = int(v.laneId[1:])
+                 if v_col == col:
+                     if abs(v.position - center_v) < radius:
+                         return True # Blocked by Vertical traffic
+
+        return False
 
     def _optimize_signals(self, intersection: Intersection):
         ns_load, ew_load = self._calculate_density(intersection.id)
@@ -498,8 +564,9 @@ class SimulationEngine:
                          print(f"Restore {target_id} after Emergency passed")
                     
                     ev.current_target_index += 1
-        else:
-            # Route complete
+        
+        # End emergency only when vehicle leaves the grid (visual range)
+        if self.emergency_vehicle and self.emergency_vehicle.position > 650.0:
             self.stop_emergency()
 
 # Global instance
