@@ -437,7 +437,7 @@ class SimulationEngine:
             id="EM-1",
             position=-50.0, # Start before grid
             laneId="H0",
-            speed=20.0, # Fast
+            speed=35.0, # Faster
             route=route,
             active=True,
             current_target_index=0,
