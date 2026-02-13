@@ -156,51 +156,187 @@ class SimulationEngine:
              intersection.timer = intersection.nsGreenTime
 
     def _update_vehicles(self, dt: float):
+        # 1. Group by Lane
+        vehicles_by_lane = {}
         for v in self.vehicles:
-            # Check for stop conditions
-            should_stop = self._check_stop_condition(v)
+            if v.laneId not in vehicles_by_lane:
+                vehicles_by_lane[v.laneId] = []
+            vehicles_by_lane[v.laneId].append(v)
+
+        # 2. Physics Constants (Scaled for 100-unit grid)
+        # Using 15.0 stop offset (user asked for 0.12 on 1.0 scale -> ~12.0)
+        STOP_OFFSET = 20.0 
+        MIN_GAP = 8.0
+        ACCELERATION = 10.0 # units/s^2
+        DECELERATION = 20.0 # units/s^2
+
+        # 3. Process each lane
+        for lane_id, lane_vehicles in vehicles_by_lane.items():
+            # Sort vehicles
+            # Horizontal (East): Increasing pos -> Sort descending (leader first)
+            # Horizontal (West): Decreasing pos -> Sort ascending (leader first)
+            # Vertical (South): Increasing pos -> Sort descending
+            # Vertical (North): Decreasing pos -> Sort ascending
             
-            if should_stop:
-                v.speed = 0.0
-            else:
-                # Accelerate back to target speed
-                # Simple instant acceleration for prototype
-                v.speed = v.target_speed
-
-            move_amount = v.speed * dt
+            is_increasing = "H" in lane_id # Assuming H lanes move East? 
+            # Wait, H lanes can be East or West.
+            # V lanes can be North or South.
+            # I assigned direction randomly in spawn.
+            # BUT laneId implies direction usually. 
+            # Current spawn logic:
+            # lane_idx = random.randint(0,4)
+            # if random.choice([True, False]):
+            #    laneId = f"H{lane_idx}", direction = random.choice(["east", "west"])
             
-            if v.direction in ["east", "south"]:
-                v.position += move_amount
-            else:
-                v.position -= move_amount
+            # This allows opposing traffic in SAME lane ID? That's bad.
+            # "H0" should probably be one direction or bi-directional with offset?
+            # For this prototype, I'll assume:
+            # H0, H2, H4 -> East
+            # H1, H3 -> West
+            # V0, V2, V4 -> South
+            # V1, V3 -> North
+            # Wait, I need to check spawn logic or enforce it.
+            # The current spawn logic calculates direction blindly.
+            # I will trust the vehicle's direction for sorting.
+            
+            # Actually, mixed directions in one list is chaotic.
+            # Let's filter by direction too.
+            
+            direction_groups = {}
+            for v in lane_vehicles:
+                if v.direction not in direction_groups:
+                    direction_groups[v.direction] = []
+                direction_groups[v.direction].append(v)
 
-            # Respawn if out of bounds
-            if v.position > 600 or v.position < -100: # Extended range for 5x5 grid
-                self.vehicles.remove(v)
-                self._spawn_vehicle()
-        
-        if len(self.vehicles) < 20: 
-            if random.random() < 0.1: 
-                self._spawn_vehicle()
+            for direction, vehicles in direction_groups.items():
+                if direction in ["east", "south"]:
+                    # Increasing position. Leader has highest position.
+                    vehicles.sort(key=lambda v: v.position, reverse=True)
+                else:
+                    # Decreasing position. Leader has lowest position.
+                    vehicles.sort(key=lambda v: v.position)
 
-    def _check_stop_condition(self, v: Vehicle) -> bool:
-        # Determine upcoming intersection
-        # Lane ID format: H{row} or V{col}
+                # Process vehicles in order (Leader first)
+                for i, v in enumerate(vehicles):
+                    target_speed = v.target_speed
+                    stop_pos = -1 # No stop required
+                    
+                    # A. Check Signal / Stop Line (Only for Leader or if intersection is between v and leader)
+                    upcoming_int, dist_to_int = self._get_upcoming_intersection_info(v)
+                    
+                    if upcoming_int:
+                        # Check Signal
+                        should_stop = False
+                        if "H" in v.laneId:
+                            if upcoming_int.ewSignal in [SignalState.RED, SignalState.YELLOW]:
+                                should_stop = True
+                        else:
+                            if upcoming_int.nsSignal in [SignalState.RED, SignalState.YELLOW]:
+                                should_stop = True
+                        
+                        if should_stop:
+                            # Calculate Stop Line Position
+                            # Int pos is at row*100 or col*100
+                            # Center of intersection.
+                            center_pos = self._get_intersection_pos(v, upcoming_int)
+                            
+                            if direction in ["east", "south"]:
+                                stop_pos = center_pos - STOP_OFFSET
+                                # If we passed it, don't stop (unless backed up?)
+                                if v.position > stop_pos: 
+                                    stop_pos = -1
+                            else:
+                                stop_pos = center_pos + STOP_OFFSET
+                                if v.position < stop_pos:
+                                    stop_pos = -1
+
+                    # B. Check Lead Vehicle (Queueing)
+                    if i > 0:
+                        lead_vehicle = vehicles[i-1]
+                        gap = abs(lead_vehicle.position - v.position) - 5.0 # minus vehicle length roughly
+                        
+                        # Ideal stop pos behind leader
+                        if direction in ["east", "south"]:
+                            lead_stop_pos = lead_vehicle.position - MIN_GAP
+                            if stop_pos == -1 or lead_stop_pos < stop_pos:
+                                stop_pos = lead_stop_pos
+                        else:
+                            lead_stop_pos = lead_vehicle.position + MIN_GAP
+                            if stop_pos == -1 or lead_stop_pos > stop_pos:
+                                stop_pos = lead_stop_pos
+
+                    # C. Apply Physics
+                    # If we need to stop
+                    if stop_pos != -1:
+                        # Distance to stop
+                        dist_to_stop = abs(stop_pos - v.position)
+                        
+                        if dist_to_stop < 1.0:
+                            v.speed = 0.0
+                            v.position = stop_pos
+                        elif dist_to_stop < 100.0: # Start braking earlier
+                            # Calculate required decel to stop at distance
+                            if v.speed > 0:
+                                # v^2 = u^2 + 2as -> 0 = v^2 + 2(-a)s -> a = v^2 / 2s
+                                required_decel = (v.speed ** 2) / (2 * dist_to_stop)
+                                # Clamp to vehicle limits
+                                actual_decel = min(DECELERATION, required_decel)
+                                # If we are too fast, we must max out braking (even if it means overshoot, but we try)
+                                if required_decel > DECELERATION:
+                                     actual_decel = DECELERATION
+                                
+                                # Apply
+                                v.speed -= actual_decel * dt
+                                
+                                # Prevent stopping too early due to discrete steps?
+                                # Ensure min speed if far?
+                                if dist_to_stop > 10.0 and v.speed < 2.0:
+                                     v.speed = 2.0
+                                elif v.speed < 0.5:
+                                     v.speed = 0.5 # Creep very slowly to 1.0 mark
+                            else:
+                                v.speed = 0.0
+                    else:
+                        # Accelerate
+                        if v.speed < target_speed:
+                            v.speed += ACCELERATION * dt
+                            if v.speed > target_speed: v.speed = target_speed
+
+                    # D. Move
+                    move_amount = v.speed * dt
+                    if direction in ["east", "south"]:
+                        new_pos = v.position + move_amount
+                        # Constraint: Don't cross stop_pos if set
+                        if stop_pos != -1 and new_pos > stop_pos:
+                            new_pos = stop_pos
+                            v.speed = 0.0
+                        v.position = new_pos
+                    else:
+                        new_pos = v.position - move_amount
+                        if stop_pos != -1 and new_pos < stop_pos:
+                            new_pos = stop_pos
+                            v.speed = 0.0
+                        v.position = new_pos
+
+                    # Respawn bounds
+                    if v.position > 600 or v.position < -100:
+                        self.vehicles.remove(v)
+                        self._spawn_vehicle()
+
+        if len(self.vehicles) < 20 and random.random() < 0.1:
+            self._spawn_vehicle()
+
+    def _get_upcoming_intersection_info(self, v: Vehicle):
+        # Logic extracted from _check_stop_condition but returns obj + dist
         try:
              idx = int(v.laneId[1:])
         except:
-             return False
+             return None, 9999.0
 
         if v.laneType == "horizontal":
             row = idx
-            # Determine intersection col based on position and direction
-            # Intersections are at Col * 100
-            # If moving East (increasing pos), look for next (Col * 100) > valid pos
-            # If moving West (decreasing pos), look for next (Col * 100) < valid pos
-            
             target_col = -1
             dist = 9999.0
-            
             for col in range(5):
                 intersection_pos = col * 100.0
                 if v.direction == "east":
@@ -216,23 +352,17 @@ class SimulationEngine:
                              dist = d
                              target_col = col
             
-            if target_col != -1 and dist < 25.0: # Stop threshold
-                 # Found intersection
-                 intersection_id = f"I-{100 + (row * 5) + target_col + 1}"
-                 intersection = self.intersections.get(intersection_id)
-                 if intersection:
-                     # Check EW Signal for Horizontal Lane
-                     if intersection.ewSignal == SignalState.RED or intersection.ewSignal == SignalState.YELLOW:
-                         return True
-                         
+            if target_col != -1 and dist < 100.0: # Only care if within 1 block
+                 iid = f"I-{100 + (row * 5) + target_col + 1}"
+                 return self.intersections.get(iid), dist
+                 
         else: # vertical
             col = idx
             target_row = -1
             dist = 9999.0
-            
             for row in range(5):
-                intersection_pos = row * 100.0 # Intersection V pos is Row * 100
-                if v.direction == "south": # increasing pos
+                intersection_pos = row * 100.0
+                if v.direction == "south":
                      if intersection_pos > v.position:
                          d = intersection_pos - v.position
                          if d < dist:
@@ -245,15 +375,25 @@ class SimulationEngine:
                              dist = d
                              target_row = row
             
-            if target_row != -1 and dist < 25.0:
-                 intersection_id = f"I-{100 + (target_row * 5) + col + 1}"
-                 intersection = self.intersections.get(intersection_id)
-                 if intersection:
-                     # Check NS Signal for Vertical Lane
-                     if intersection.nsSignal == SignalState.RED or intersection.nsSignal == SignalState.YELLOW:
-                         return True
+            if target_row != -1 and dist < 100.0:
+                 iid = f"I-{100 + (target_row * 5) + col + 1}"
+                 return self.intersections.get(iid), dist
 
-        return False
+        return None, 9999.0
+
+    def _get_intersection_pos(self, v: Vehicle, intersection: Intersection) -> float:
+        # returns the relevant axis position (x or y) of the intersection
+        try:
+            idx = int(intersection.id.split("-")[1]) - 101
+            row = idx // 5
+            col = idx % 5
+            if v.laneType == "horizontal":
+                return col * 100.0
+            else:
+                return row * 100.0
+        except:
+            return 0.0
+
 
     def get_state(self) -> GridState:
         return GridState(
