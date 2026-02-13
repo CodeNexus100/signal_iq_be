@@ -14,13 +14,27 @@ class IntersectionMode(str, Enum):
     EMERGENCY_OVERRIDE = "EMERGENCY_OVERRIDE"
 
 class Intersection(BaseModel):
-    id: str
+    id: str  # e.g., "I-101"
     nsSignal: SignalState
     ewSignal: SignalState
     timer: float
     mode: IntersectionMode
     nsGreenTime: float = 10.0
     ewGreenTime: float = 10.0
+
+class Vehicle(BaseModel):
+    id: str
+    laneId: str
+    laneType: str # "horizontal" or "vertical"
+    direction: str # "north", "south", "east", "west"
+    position: float
+    speed: float
+    target_speed: float = 10.0 # Speed to resume after stopping
+    type: str # "car", "truck"
+
+class GridState(BaseModel):
+    intersections: List[Intersection]
+    vehicles: List[Vehicle]
 
 class SignalUpdate(BaseModel):
     nsGreenTime: Optional[float] = None
@@ -29,16 +43,3 @@ class SignalUpdate(BaseModel):
 
 class AIToggle(BaseModel):
     enabled: bool
-
-class Vehicle(BaseModel):
-    id: str
-    laneId: str
-    laneType: str  # "horizontal" or "vertical"
-    direction: str # "north", "south", "east", "west"
-    position: float
-    speed: float
-    type: str = "car"
-
-class GridState(BaseModel):
-    intersections: List[Intersection]
-    vehicles: List[Vehicle]

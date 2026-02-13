@@ -56,6 +56,7 @@ class SimulationEngine:
             direction=direction,
             position=random.uniform(0, 500), # Increased range to cover whole grid
             speed=random.uniform(5, 15),
+            target_speed=random.uniform(5, 15),
             type="car"
         )
         self.vehicles.append(vehicle)
@@ -66,10 +67,7 @@ class SimulationEngine:
 
     def _update_signals(self, dt: float):
         for intersection in self.intersections.values():
-            if intersection.mode == IntersectionMode.MANUAL:
-                 continue # Manual mode halts timer-based switching
-                 
-            if intersection.mode not in [IntersectionMode.FIXED, IntersectionMode.AI_OPTIMIZED]:
+            if intersection.mode not in [IntersectionMode.FIXED, IntersectionMode.AI_OPTIMIZED, IntersectionMode.MANUAL]:
                 continue
                 
             intersection.timer -= dt
@@ -159,6 +157,16 @@ class SimulationEngine:
 
     def _update_vehicles(self, dt: float):
         for v in self.vehicles:
+            # Check for stop conditions
+            should_stop = self._check_stop_condition(v)
+            
+            if should_stop:
+                v.speed = 0.0
+            else:
+                # Accelerate back to target speed
+                # Simple instant acceleration for prototype
+                v.speed = v.target_speed
+
             move_amount = v.speed * dt
             
             if v.direction in ["east", "south"]:
@@ -174,6 +182,78 @@ class SimulationEngine:
         if len(self.vehicles) < 20: 
             if random.random() < 0.1: 
                 self._spawn_vehicle()
+
+    def _check_stop_condition(self, v: Vehicle) -> bool:
+        # Determine upcoming intersection
+        # Lane ID format: H{row} or V{col}
+        try:
+             idx = int(v.laneId[1:])
+        except:
+             return False
+
+        if v.laneType == "horizontal":
+            row = idx
+            # Determine intersection col based on position and direction
+            # Intersections are at Col * 100
+            # If moving East (increasing pos), look for next (Col * 100) > valid pos
+            # If moving West (decreasing pos), look for next (Col * 100) < valid pos
+            
+            target_col = -1
+            dist = 9999.0
+            
+            for col in range(5):
+                intersection_pos = col * 100.0
+                if v.direction == "east":
+                     if intersection_pos > v.position:
+                         d = intersection_pos - v.position
+                         if d < dist:
+                             dist = d
+                             target_col = col
+                else: # west
+                     if intersection_pos < v.position:
+                         d = v.position - intersection_pos
+                         if d < dist:
+                             dist = d
+                             target_col = col
+            
+            if target_col != -1 and dist < 25.0: # Stop threshold
+                 # Found intersection
+                 intersection_id = f"I-{100 + (row * 5) + target_col + 1}"
+                 intersection = self.intersections.get(intersection_id)
+                 if intersection:
+                     # Check EW Signal for Horizontal Lane
+                     if intersection.ewSignal == SignalState.RED or intersection.ewSignal == SignalState.YELLOW:
+                         return True
+                         
+        else: # vertical
+            col = idx
+            target_row = -1
+            dist = 9999.0
+            
+            for row in range(5):
+                intersection_pos = row * 100.0 # Intersection V pos is Row * 100
+                if v.direction == "south": # increasing pos
+                     if intersection_pos > v.position:
+                         d = intersection_pos - v.position
+                         if d < dist:
+                             dist = d
+                             target_row = row
+                else: # north
+                     if intersection_pos < v.position:
+                         d = v.position - intersection_pos
+                         if d < dist:
+                             dist = d
+                             target_row = row
+            
+            if target_row != -1 and dist < 25.0:
+                 intersection_id = f"I-{100 + (target_row * 5) + col + 1}"
+                 intersection = self.intersections.get(intersection_id)
+                 if intersection:
+                     # Check NS Signal for Vertical Lane
+                     if intersection.nsSignal == SignalState.RED or intersection.nsSignal == SignalState.YELLOW:
+                         return True
+
+        return False
 
     def get_state(self) -> GridState:
         return GridState(
