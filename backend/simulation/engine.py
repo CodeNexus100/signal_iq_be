@@ -1,12 +1,13 @@
 import random
 import time
 from typing import Dict, List, Optional
-from .models import Intersection, IntersectionMode, SignalState, Vehicle, GridState, SignalUpdate
+from .models import Intersection, IntersectionMode, SignalState, Vehicle, GridState, SignalUpdate, EmergencyVehicle
 
 class SimulationEngine:
     def __init__(self):
         self.intersections: Dict[str, Intersection] = {}
         self.vehicles: List[Vehicle] = []
+        self.emergency_vehicle: Optional[EmergencyVehicle] = None
         self._initialize_grid()
         self._initialize_vehicles()
 
@@ -64,6 +65,8 @@ class SimulationEngine:
     def update(self, dt: float):
         self._update_signals(dt)
         self._update_vehicles(dt)
+        if self.emergency_vehicle and self.emergency_vehicle.active:
+            self._update_emergency_vehicle(dt)
 
     def _update_signals(self, dt: float):
         for intersection in self.intersections.values():
@@ -157,7 +160,7 @@ class SimulationEngine:
 
     def _update_vehicles(self, dt: float):
         # 1. Group by Lane
-        vehicles_by_lane = {}
+        vehicles_by_lane: Dict[str, List[Vehicle]] = {}
         for v in self.vehicles:
             if v.laneId not in vehicles_by_lane:
                 vehicles_by_lane[v.laneId] = []
@@ -202,7 +205,7 @@ class SimulationEngine:
             # Actually, mixed directions in one list is chaotic.
             # Let's filter by direction too.
             
-            direction_groups = {}
+            direction_groups: Dict[str, List[Vehicle]] = {}
             for v in lane_vehicles:
                 if v.direction not in direction_groups:
                     direction_groups[v.direction] = []
@@ -398,7 +401,8 @@ class SimulationEngine:
     def get_state(self) -> GridState:
         return GridState(
             intersections=list(self.intersections.values()),
-            vehicles=self.vehicles
+            vehicles=self.vehicles,
+            emergency=self.emergency_vehicle
         )
 
     def get_intersection(self, intersection_id: str) -> Optional[Intersection]:
@@ -422,6 +426,81 @@ class SimulationEngine:
         new_mode = IntersectionMode.AI_OPTIMIZED if enabled else IntersectionMode.FIXED
         for intersection in self.intersections.values():
             intersection.mode = new_mode
+
+    def start_emergency(self):
+        # Route: I-101 -> I-102 -> I-103 -> I-104 -> I-105
+        # Lane: H0 (Row 0, Horizontal)
+        # Direction: East
+        route = ["I-101", "I-102", "I-103", "I-104", "I-105"]
+        
+        self.emergency_vehicle = EmergencyVehicle(
+            id="EM-1",
+            position=-50.0, # Start before grid
+            laneId="H0",
+            speed=20.0, # Fast
+            route=route,
+            active=True,
+            current_target_index=0,
+            type="emergency"
+        )
+        print("Emergency Vehicle Started")
+
+    def stop_emergency(self):
+        if not self.emergency_vehicle:
+            return
+
+        self.emergency_vehicle.active = False
+        # Restore all intersections to previous mode (FIXED for now)
+        for iid in self.emergency_vehicle.route:
+            if iid in self.intersections:
+                    # If still in override, reset
+                    if self.intersections[iid].mode == IntersectionMode.EMERGENCY_OVERRIDE:
+                        self.intersections[iid].mode = IntersectionMode.FIXED
+        
+        self.emergency_vehicle = None
+        print("Emergency Vehicle Stopped")
+
+    def _update_emergency_vehicle(self, dt: float):
+        if not self.emergency_vehicle:
+            return
+            
+        ev = self.emergency_vehicle
+        ev.position += ev.speed * dt
+        
+        # Check target
+        if ev.current_target_index < len(ev.route):
+            target_id = ev.route[ev.current_target_index]
+            intersection = self.intersections.get(target_id)
+            
+            if intersection:
+                # Get Intersection Position (Col * 100)
+                # H0 -> Row 0. 
+                # I-101 (Col 0) -> 0.0
+                # I-102 (Col 1) -> 100.0
+                col = int(target_id.split("-")[1]) - 101 # 0, 1, 2...
+                col = col % 5
+                target_pos = col * 100.0
+                
+                dist = target_pos - ev.position
+                
+                # If approaching (e.g. < 150 units), override signal
+                if 0 < dist < 150.0:
+                    if intersection.mode != IntersectionMode.EMERGENCY_OVERRIDE:
+                        intersection.mode = IntersectionMode.EMERGENCY_OVERRIDE
+                        intersection.ewSignal = SignalState.GREEN
+                        intersection.nsSignal = SignalState.RED
+                        print(f"Override {target_id} for Emergency")
+
+                # If passed (dist < -20), restore and next target
+                if dist < -20.0:
+                    if intersection.mode == IntersectionMode.EMERGENCY_OVERRIDE:
+                         intersection.mode = IntersectionMode.FIXED # or revert to prev
+                         print(f"Restore {target_id} after Emergency passed")
+                    
+                    ev.current_target_index += 1
+        else:
+            # Route complete
+            self.stop_emergency()
 
 # Global instance
 simulation_engine = SimulationEngine()

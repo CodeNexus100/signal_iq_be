@@ -70,6 +70,26 @@ async def toggle_ai_mode(toggle: AIToggle):
     simulation_engine.set_ai_mode(toggle.enabled)
     return {"status": "AI Mode Updated", "enabled": toggle.enabled}
 
+@app.post("/api/emergency/start")
+async def start_emergency():
+    """Starts an emergency vehicle simulation"""
+    try:
+        simulation_engine.start_emergency()
+        return {"status": "Emergency Started", "vehicle": simulation_engine.emergency_vehicle}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/emergency/stop")
+async def stop_emergency():
+    """Stops the emergency vehicle simulation"""
+    simulation_engine.stop_emergency()
+    return {"status": "Emergency Stopped"}
+
+@app.get("/api/emergency/state")
+async def get_emergency_state():
+    """Returns the state of the emergency vehicle"""
+    return {"emergency": simulation_engine.emergency_vehicle}
+
 
 @app.get("/")
 def read_root():

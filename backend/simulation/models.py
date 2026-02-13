@@ -32,9 +32,20 @@ class Vehicle(BaseModel):
     target_speed: float = 10.0 # Speed to resume after stopping
     type: str # "car", "truck"
 
+class EmergencyVehicle(BaseModel):
+    id: str
+    position: float
+    laneId: str
+    speed: float
+    route: List[str] # List of intersection IDs
+    active: bool
+    current_target_index: int = 0
+    type: str = "emergency"
+
 class GridState(BaseModel):
     intersections: List[Intersection]
     vehicles: List[Vehicle]
+    emergency: Optional[EmergencyVehicle] = None
 
 class SignalUpdate(BaseModel):
     nsGreenTime: Optional[float] = None
