@@ -33,10 +33,14 @@ def run_test():
     # Hard to simulate specific congestion via API without spawning tons of vehicles specificly.
     # But we can check if the status is valid structure.
     
-    if "congestionRoad" in status and "recommendedDirection" in status:
+    # 4. Check status structure
+    if "congestionLevel" in status and "recommendation" in status:
         print("\nPASS: AI Status endpoint returns valid structure.")
+        print(f"Congestion Level: {status.get('congestionLevel')}")
+        print(f"Recommendation: {status.get('recommendation')}")
     else:
         print("\nFAIL: Invalid AI Status structure.")
+        print(f"Received keys: {list(status.keys())}")
 
 if __name__ == "__main__":
     run_test()

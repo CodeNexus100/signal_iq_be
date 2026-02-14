@@ -5,6 +5,7 @@ from .models import (
     Intersection, IntersectionMode, SignalState, Vehicle, GridState, SignalUpdate, 
     EmergencyVehicle, AIStatus, AIPrediction, AIRecommendation
 )
+from . import config
 
 class SimulationEngine:
     def __init__(self):
@@ -15,7 +16,12 @@ class SimulationEngine:
         self._last_ai_update = 0.0
         self.ai_mode = False # Global AI mode state
         self._initialize_grid()
+        self.particles_by_lane: Dict[str, List[Vehicle]] = {} # Cache for optimization
+        self._initialize_grid()
         self._initialize_vehicles()
+
+    def _get_vehicles_in_lane(self, lane_id: str) -> List[Vehicle]:
+        return [v for v in self.vehicles if v.laneId == lane_id]
 
     def _initialize_grid(self):
         # 5x5 Grid: I-101 to I-125
@@ -31,8 +37,8 @@ class SimulationEngine:
                 ewSignal=start_ew,
                 timer=random.randint(5, 10), # Random start timer
                 mode=IntersectionMode.FIXED,
-                nsGreenTime=10.0,
-                ewGreenTime=10.0
+                nsGreenTime=config.MIN_GREEN_TIME,
+                ewGreenTime=config.MIN_GREEN_TIME
             )
 
     def _initialize_vehicles(self):
@@ -41,7 +47,7 @@ class SimulationEngine:
             self._spawn_vehicle()
 
     def _spawn_vehicle(self):
-        if len(self.vehicles) >= 50: # Limit max vehicles
+        if len(self.vehicles) >= config.MAX_VEHICLES:
             return
 
         is_horizontal = random.choice([True, False])
@@ -61,9 +67,9 @@ class SimulationEngine:
             laneId=lane_id,
             laneType=lane_type,
             direction=direction,
-            position=random.uniform(0, 500), # Increased range to cover whole grid
-            speed=random.uniform(5, 15),
-            target_speed=random.uniform(5, 15),
+            position=random.uniform(0, 500), 
+            speed=random.uniform(config.MIN_SPEED, config.MAX_SPEED),
+            target_speed=random.uniform(config.MIN_SPEED, config.MAX_SPEED),
             type="car"
         )
         self.vehicles.append(vehicle)
@@ -111,28 +117,30 @@ class SimulationEngine:
         # "number_of_vehicles_on_lane" implies the whole lane? Or just the approach?
         # Let's use the density logic: Vehicles within radius 30.0 of intersection
         
-        radius = 50.0 # larger radius
+        radius = config.CONGESTION_RADIUS
         
         idx = int(intersection_id.split("-")[1]) - 101
         row = idx // 5
         col = idx % 5
         
-        int_h_pos = col * 100.0
-        int_v_pos = row * 100.0
+        int_h_pos = col * config.INTERSECTION_SPACING
+        int_v_pos = row * config.INTERSECTION_SPACING
         
-        for v in self.vehicles:
-            if v.laneId == lane_id:
-                # Check distance
-                dist = 9999.0
-                if "H" in lane_id:
-                    dist = abs(v.position - int_h_pos)
-                else:
-                    dist = abs(v.position - int_v_pos)
-                    
-                if dist < radius:
-                    count += 1
-                    if v.speed < 1.0:
-                        waiting += 1
+        # Optimize: iterate only vehicles in this lane
+        lane_vehicles = self._get_vehicles_in_lane(lane_id)
+        
+        for v in lane_vehicles:
+            # Check distance
+            dist = 9999.0
+            if "H" in lane_id:
+                dist = abs(v.position - int_h_pos)
+            else:
+                dist = abs(v.position - int_v_pos)
+                
+            if dist < radius:
+                count += 1
+                if v.speed < 1.0:
+                    waiting += 1
                         
         return count + (waiting * 2)
 
@@ -237,17 +245,17 @@ class SimulationEngine:
         if not hasattr(self, "_last_ai_update"):
             self._last_ai_update = 0
             
-        if current_time - self._last_ai_update > 2.0: # 2 second update interval
+        if current_time - self._last_ai_update > config.AI_UPDATE_INTERVAL:
             self._last_ai_update = current_time
             
             for intersection in self.intersections.values():
                  if intersection.mode == IntersectionMode.AI_OPTIMIZED:
                      if recommended == "North-South":
-                         intersection.nsGreenTime = min(60.0, intersection.nsGreenTime + 1.0) # Slow drifting
-                         intersection.ewGreenTime = max(10.0, intersection.ewGreenTime - 1.0)
+                         intersection.nsGreenTime = min(config.MAX_GREEN_TIME, intersection.nsGreenTime + 1.0) # Slow drifting
+                         intersection.ewGreenTime = max(config.MIN_GREEN_TIME, intersection.ewGreenTime - 1.0)
                      elif recommended == "East-West":
-                         intersection.ewGreenTime = min(60.0, intersection.ewGreenTime + 1.0)
-                         intersection.nsGreenTime = max(10.0, intersection.nsGreenTime - 1.0)
+                         intersection.ewGreenTime = min(config.MAX_GREEN_TIME, intersection.ewGreenTime + 1.0)
+                         intersection.nsGreenTime = max(config.MIN_GREEN_TIME, intersection.nsGreenTime - 1.0)
 
         # 4. Global Status
         # Determine strict congestion level
@@ -295,22 +303,22 @@ class SimulationEngine:
             # Approx position of intersection on lane
             # For H lane, intersection is at V-col position (col * 100)
             # For V lane, intersection is at H-row position (row * 100)
-            intersection_h_pos = col * 100.0
-            intersection_v_pos = row * 100.0
+            intersection_h_pos = col * config.INTERSECTION_SPACING
+            intersection_v_pos = row * config.INTERSECTION_SPACING
             
-            radius = 30.0 # Detection radius
+            radius = config.DETECTION_RADIUS
             
             ns_load: int = 0
             ew_load: int = 0
             
-            for v in self.vehicles:
-                if v.laneId == h_lane_id:
-                    if abs(v.position - intersection_h_pos) < radius:
-                        # Check if approaching? For prototype, simple proximity load
-                        ew_load += 1
-                elif v.laneId == v_lane_id:
-                     if abs(v.position - intersection_v_pos) < radius:
-                        ns_load += 1
+            # Optimize: Only check relevant lanes
+            for v in self._get_vehicles_in_lane(h_lane_id):
+                if abs(v.position - intersection_h_pos) < radius:
+                    ew_load += 1
+            
+            for v in self._get_vehicles_in_lane(v_lane_id):
+                 if abs(v.position - intersection_v_pos) < radius:
+                    ns_load += 1
                         
             return ns_load, ew_load
 
@@ -325,8 +333,8 @@ class SimulationEngine:
         # We modify the *stored* green times so next cycle uses them
         
         step = 5.0
-        min_green = 10.0
-        max_green = 60.0
+        min_green = config.MIN_GREEN_TIME
+        max_green = config.MAX_GREEN_TIME
         
         if ns_load > ew_load:
             intersection.nsGreenTime = min(max_green, intersection.nsGreenTime + step)
@@ -345,14 +353,14 @@ class SimulationEngine:
         
         if intersection.nsSignal == SignalState.GREEN:
             intersection.nsSignal = SignalState.YELLOW
-            intersection.timer = 3.0
+            intersection.timer = config.YELLOW_TIME
         elif intersection.nsSignal == SignalState.YELLOW:
             intersection.nsSignal = SignalState.RED
             intersection.ewSignal = SignalState.GREEN
             intersection.timer = intersection.ewGreenTime
         elif intersection.ewSignal == SignalState.GREEN:
             intersection.ewSignal = SignalState.YELLOW
-            intersection.timer = 3.0
+            intersection.timer = config.YELLOW_TIME
         elif intersection.ewSignal == SignalState.YELLOW:
             intersection.ewSignal = SignalState.RED
             intersection.nsSignal = SignalState.GREEN
@@ -362,19 +370,13 @@ class SimulationEngine:
              intersection.timer = intersection.nsGreenTime
 
     def _update_vehicles(self, dt: float):
-        # 1. Group by Lane
+        # 1. Group by Lane (Optimize: this rebuilds the index every tick. 
+        # Ideally we maintain it, but for n=50 it's fast enough to rebuild)
         vehicles_by_lane: Dict[str, List[Vehicle]] = {}
         for v in self.vehicles:
             if v.laneId not in vehicles_by_lane:
                 vehicles_by_lane[v.laneId] = []
             vehicles_by_lane[v.laneId].append(v)
-
-        # 2. Physics Constants (Scaled for 100-unit grid)
-        # Using 15.0 stop offset (user asked for 0.12 on 1.0 scale -> ~12.0)
-        STOP_OFFSET = 20.0 
-        MIN_GAP = 8.0
-        ACCELERATION = 10.0 # units/s^2
-        DECELERATION = 20.0 # units/s^2
 
         # 3. Process each lane
         for lane_id, lane_vehicles in vehicles_by_lane.items():
@@ -384,16 +386,6 @@ class SimulationEngine:
             # Vertical (South): Increasing pos -> Sort descending
             # Vertical (North): Decreasing pos -> Sort ascending
             
-            is_increasing = "H" in lane_id # Assuming H lanes move East? 
-            # Wait, H lanes can be East or West.
-            # V lanes can be North or South.
-            # I assigned direction randomly in spawn.
-            # BUT laneId implies direction usually. 
-            # Current spawn logic:
-            # lane_idx = random.randint(0,4)
-            # if random.choice([True, False]):
-            #    laneId = f"H{lane_idx}", direction = random.choice(["east", "west"])
-            
             # This allows opposing traffic in SAME lane ID? That's bad.
             # "H0" should probably be one direction or bi-directional with offset?
             # For this prototype, I'll assume:
@@ -401,12 +393,6 @@ class SimulationEngine:
             # H1, H3 -> West
             # V0, V2, V4 -> South
             # V1, V3 -> North
-            # Wait, I need to check spawn logic or enforce it.
-            # The current spawn logic calculates direction blindly.
-            # I will trust the vehicle's direction for sorting.
-            
-            # Actually, mixed directions in one list is chaotic.
-            # Let's filter by direction too.
             
             direction_groups: Dict[str, List[Vehicle]] = {}
             for v in lane_vehicles:
@@ -447,27 +433,31 @@ class SimulationEngine:
                             center_pos = self._get_intersection_pos(v, upcoming_int)
                             
                             if direction in ["east", "south"]:
-                                stop_pos = center_pos - STOP_OFFSET
-                                # If we passed it, don't stop (unless backed up?)
-                                if v.position > stop_pos: 
+                                stop_pos = center_pos - config.STOP_OFFSET
+                                # Fix: Don't give up stopping just because we passed the line.
+                                # Only give up if we passed the CENTER (entered intersection) or some "too late" point.
+                                # Let's say if we are past the line but not yet at center, keep stopping.
+                                if v.position > center_pos: 
                                     stop_pos = -1
                             else:
-                                stop_pos = center_pos + STOP_OFFSET
-                                if v.position < stop_pos:
+                                stop_pos = center_pos + config.STOP_OFFSET
+                                # Fix: West/North (decreasing). Center < StopLine.
+                                # If v.pos < StopLine, we passed it.
+                                # Only give up if v.pos < Center.
+                                if v.position < center_pos:
                                     stop_pos = -1
 
                     # B. Check Lead Vehicle (Queueing)
                     if i > 0:
                         lead_vehicle = vehicles[i-1]
-                        gap = abs(lead_vehicle.position - v.position) - 5.0 # minus vehicle length roughly
                         
                         # Ideal stop pos behind leader
                         if direction in ["east", "south"]:
-                            lead_stop_pos = lead_vehicle.position - MIN_GAP
+                            lead_stop_pos = lead_vehicle.position - config.MIN_GAP
                             if stop_pos == -1 or lead_stop_pos < stop_pos:
                                 stop_pos = lead_stop_pos
                         else:
-                            lead_stop_pos = lead_vehicle.position + MIN_GAP
+                            lead_stop_pos = lead_vehicle.position + config.MIN_GAP
                             if stop_pos == -1 or lead_stop_pos > stop_pos:
                                 stop_pos = lead_stop_pos
 
@@ -480,32 +470,28 @@ class SimulationEngine:
                         if dist_to_stop < 1.0:
                             v.speed = 0.0
                             v.position = stop_pos
-                        elif dist_to_stop < 100.0: # Start braking earlier
-                            # Calculate required decel to stop at distance
-                            if v.speed > 0:
-                                # v^2 = u^2 + 2as -> 0 = v^2 + 2(-a)s -> a = v^2 / 2s
+                        elif dist_to_stop < 150.0: # Check stopping condition logic
+                            # Smart Approach Logic
+                            # Allow vehicle to move IF it can safely stop in remaining distance.
+                            # v_safe = sqrt(2 * a * d) * safety_factor
+                            safe_speed = (2 * config.DECELERATION * dist_to_stop) ** 0.5 * 0.8
+                            
+                            if v.speed > safe_speed:
+                                # We are too fast, BRAKE
                                 required_decel = (v.speed ** 2) / (2 * dist_to_stop)
-                                # Clamp to vehicle limits
-                                actual_decel = min(DECELERATION, required_decel)
-                                # If we are too fast, we must max out braking (even if it means overshoot, but we try)
-                                if required_decel > DECELERATION:
-                                     actual_decel = DECELERATION
-                                
-                                # Apply
+                                actual_decel = min(config.DECELERATION * 1.5, required_decel) # Allow harder braking if needed
                                 v.speed -= actual_decel * dt
-                                
-                                # Prevent stopping too early due to discrete steps?
-                                # Ensure min speed if far?
-                                if dist_to_stop > 10.0 and v.speed < 2.0:
-                                     v.speed = 2.0
-                                elif v.speed < 0.5:
-                                     v.speed = 0.5 # Creep very slowly to 1.0 mark
+                                if v.speed < 0: v.speed = 0.0
                             else:
-                                v.speed = 0.0
+                                # We are slow enough, maintain or accelerate slightly to close gap
+                                # Only accelerate if we are significantly below target and safe
+                                if v.speed < target_speed and v.speed < safe_speed * 0.9:
+                                     v.speed += config.ACCELERATION * dt
+
                     else:
                         # Accelerate
                         if v.speed < target_speed:
-                            v.speed += ACCELERATION * dt
+                            v.speed += config.ACCELERATION * dt
                             if v.speed > target_speed: v.speed = target_speed
 
                     # D. Move
@@ -525,11 +511,11 @@ class SimulationEngine:
                         v.position = new_pos
 
                     # Respawn bounds
-                    if v.position > 600 or v.position < -100:
+                    if v.position > config.GRID_BOUNDS_MAX or v.position < config.GRID_BOUNDS_MIN:
                         self.vehicles.remove(v)
                         self._spawn_vehicle()
 
-        if len(self.vehicles) < 20 and random.random() < 0.1:
+        if len(self.vehicles) < config.MIN_SPAWN_VEHICLES and random.random() < config.SPAWN_CHANCE:
             self._spawn_vehicle()
 
     def _get_upcoming_intersection_info(self, v: Vehicle):
@@ -543,8 +529,9 @@ class SimulationEngine:
             row = idx
             target_col = -1
             dist = 9999.0
+            dist = 9999.0
             for col in range(5):
-                intersection_pos = col * 100.0
+                intersection_pos = col * config.INTERSECTION_SPACING
                 if v.direction == "east":
                      if intersection_pos > v.position:
                          d = intersection_pos - v.position
@@ -558,7 +545,7 @@ class SimulationEngine:
                              dist = d
                              target_col = col
             
-            if target_col != -1 and dist < 100.0: # Only care if within 1 block
+            if target_col != -1 and dist < config.INTERSECTION_SPACING: # Only care if within 1 block
                  iid = f"I-{100 + (row * 5) + target_col + 1}"
                  return self.intersections.get(iid), dist
                  
@@ -566,8 +553,9 @@ class SimulationEngine:
             col = idx
             target_row = -1
             dist = 9999.0
+            dist = 9999.0
             for row in range(5):
-                intersection_pos = row * 100.0
+                intersection_pos = row * config.INTERSECTION_SPACING
                 if v.direction == "south":
                      if intersection_pos > v.position:
                          d = intersection_pos - v.position
@@ -581,7 +569,7 @@ class SimulationEngine:
                              dist = d
                              target_row = row
             
-            if target_row != -1 and dist < 100.0:
+            if target_row != -1 and dist < config.INTERSECTION_SPACING:
                  iid = f"I-{100 + (target_row * 5) + col + 1}"
                  return self.intersections.get(iid), dist
 
@@ -594,9 +582,9 @@ class SimulationEngine:
             row = idx // 5
             col = idx % 5
             if v.laneType == "horizontal":
-                return col * 100.0
+                return col * config.INTERSECTION_SPACING
             else:
-                return row * 100.0
+                return row * config.INTERSECTION_SPACING
         except:
             return 0.0
 
@@ -684,12 +672,12 @@ class SimulationEngine:
                 # I-102 (Col 1) -> 100.0
                 col = int(target_id.split("-")[1]) - 101 # 0, 1, 2...
                 col = col % 5
-                target_pos = col * 100.0
+                target_pos = col * config.INTERSECTION_SPACING
                 
                 dist = target_pos - ev.position
                 
                 # If approaching (e.g. < 150 units), override signal
-                if 0 < dist < 150.0:
+                if 0 < dist < config.EMERGENCY_DETECTION_DIST:
                     if intersection.mode != IntersectionMode.EMERGENCY_OVERRIDE:
                         intersection.mode = IntersectionMode.EMERGENCY_OVERRIDE
                         intersection.ewSignal = SignalState.GREEN
@@ -705,7 +693,8 @@ class SimulationEngine:
                     ev.current_target_index += 1
         
         # End emergency only when vehicle leaves the grid (visual range)
-        if ev.position > 650.0:
+        # End emergency only when vehicle leaves the grid (visual range)
+        if ev.position > config.GRID_BOUNDS_MAX + 50.0:
             self.stop_emergency()
 
     def get_ai_status(self) -> AIStatus:
