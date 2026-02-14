@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 from .models import (
     Intersection, IntersectionMode, SignalState, Vehicle, GridState, SignalUpdate, 
     EmergencyVehicle, AIStatus, AIPrediction, AIRecommendation,
-    RoadOverview, ZoneOverview, GridOverview
+    RoadOverview, ZoneOverview, GridOverview, IntersectionSummary, SignalDetails
 )
 from . import config
 
@@ -762,6 +762,86 @@ class SimulationEngine:
             zones.append(ZoneOverview(name=name, load=round(avg_load, 2), status=status))
 
         return GridOverview(roads=roads, zones=zones)
+
+    def get_intersections_list(self) -> List[IntersectionSummary]:
+        summary_list = []
+        # Sort by ID for consistent output
+        sorted_ids = sorted(self.intersections.keys())
+        
+        for i_id in sorted_ids:
+            # Parse ID to generate name: I-r-c -> "Avenue {r+1} & Street {c+1}"
+            try:
+                parts = i_id.split('-')
+                r = int(parts[1])
+                c = int(parts[2])
+                name = f"Avenue {r+1} & Street {c+1}"
+            except:
+                name = f"Intersection {i_id}"
+                
+            summary_list.append(IntersectionSummary(
+                id=i_id,
+                name=name,
+                status="active" # Always active in this simulation
+            ))
+            
+        return summary_list
+
+            
+        return summary_list
+
+    def get_intersection_details(self, intersection_id: str) -> Optional[SignalDetails]:
+        intersection = self.intersections.get(intersection_id)
+        if not intersection:
+            return None
+            
+        # Determine Current Phase
+        # If NS is green -> NS
+        # If EW is green -> EW
+        # If both Red -> Transition/All-Red (we'll default to previous or just "All-Red")
+        phase = "All-Red"
+        if intersection.nsSignal == SignalState.GREEN:
+            phase = "NS"
+        elif intersection.ewSignal == SignalState.GREEN:
+            phase = "EW"
+        elif intersection.nsSignal == SignalState.YELLOW:
+            phase = "NS-Yellow"
+        elif intersection.ewSignal == SignalState.YELLOW:
+            phase = "EW-Yellow"
+        
+        # Calculate Flow Rate (Mock based on vehicles in related lanes)
+        # Parse I-r-c to find lanes
+        try:
+            parts = intersection_id.split('-')
+            r = int(parts[1]) # H{r}
+            c = int(parts[2]) # V{c}
+            
+            h_lane = f"H{r}"
+            v_lane = f"V{c}"
+            
+            # Count vehicles in these lanes
+            # We can use the index if we trust it's updated, or just filter.
+            # Using index for improved perf
+            h_count = len(self.particles_by_lane.get(h_lane, []))
+            v_count = len(self.particles_by_lane.get(v_lane, []))
+            
+            # Mock flow rate: (count * random factor) -> vehicles/hour approx
+            # This is just for visualization
+            raw_flow = (h_count + v_count) * 120 # e.g., 5 vehicles * 120 = 600 v/h
+            # Add some jitter so it looks alive
+            flow_rate = int(raw_flow * random.uniform(0.9, 1.1))
+        except:
+             flow_rate = random.randint(500, 1000)
+
+        return SignalDetails(
+            intersectionId=intersection.id,
+            nsGreenTime=int(intersection.nsGreenTime),
+            ewGreenTime=int(intersection.ewGreenTime),
+            currentPhase=phase,
+            timerRemaining=max(0, int(intersection.timer)),
+            flowRate=flow_rate,
+            pedestrianDemand="Low", # Hardcoded for now
+            aiEnabled=(intersection.mode == IntersectionMode.AI_OPTIMIZED)
+        )
 
 # Global instance
 simulation_engine = SimulationEngine()

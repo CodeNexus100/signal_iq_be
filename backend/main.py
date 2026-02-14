@@ -1,11 +1,12 @@
 import asyncio
 import time
 from fastapi import FastAPI, HTTPException
+from typing import List
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from .simulation.engine import simulation_engine
-from .simulation.models import GridState, Intersection, SignalUpdate, AIToggle, AIStatus, GridOverview
+from .simulation.models import GridState, Intersection, SignalUpdate, AIToggle, AIStatus, GridOverview, IntersectionSummary, SignalDetails
 
 # Background task for simulation loop
 @asynccontextmanager
@@ -48,13 +49,13 @@ async def get_grid_state():
     """Returns the current state of the simulation grid"""
     return simulation_engine.get_state()
 
-@app.get("/api/signals/{intersection_id}", response_model=Intersection)
+@app.get("/api/signals/{intersection_id}", response_model=SignalDetails)
 async def get_signal_state(intersection_id: str):
-    """Returns the state of a specific intersection"""
-    intersection = simulation_engine.get_intersection(intersection_id)
-    if not intersection:
+    """Returns the details of a specific intersection"""
+    details = simulation_engine.get_intersection_details(intersection_id)
+    if not details:
         raise HTTPException(status_code=404, detail="Intersection not found")
-    return intersection
+    return details
 
 @app.post("/api/signals/{intersection_id}/update", response_model=Intersection)
 async def update_signal_timing(intersection_id: str, updates: SignalUpdate):
@@ -99,6 +100,11 @@ async def get_ai_status():
 async def get_grid_overview():
     """Returns aggregated grid information for visualization"""
     return simulation_engine.get_grid_overview()
+
+@app.get("/api/intersections", response_model=List[IntersectionSummary])
+async def get_intersections():
+    """Returns a list of all intersections with their status"""
+    return simulation_engine.get_intersections_list()
 
 
 @app.get("/")

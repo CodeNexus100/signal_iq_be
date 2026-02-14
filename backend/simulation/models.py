@@ -84,3 +84,18 @@ class ZoneOverview(BaseModel):
 class GridOverview(BaseModel):
     roads: List[RoadOverview]
     zones: List[ZoneOverview]
+
+class IntersectionSummary(BaseModel):
+    id: str
+    name: str
+    status: str
+
+class SignalDetails(BaseModel):
+    intersectionId: str
+    nsGreenTime: int
+    ewGreenTime: int
+    currentPhase: str
+    timerRemaining: int
+    flowRate: int
+    pedestrianDemand: str
+    aiEnabled: bool
