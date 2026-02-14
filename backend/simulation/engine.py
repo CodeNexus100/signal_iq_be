@@ -3,7 +3,8 @@ import time
 from typing import Dict, List, Optional
 from .models import (
     Intersection, IntersectionMode, SignalState, Vehicle, GridState, SignalUpdate, 
-    EmergencyVehicle, AIStatus, AIPrediction, AIRecommendation
+    EmergencyVehicle, AIStatus, AIPrediction, AIRecommendation,
+    RoadOverview, ZoneOverview, GridOverview
 )
 from . import config
 
@@ -710,6 +711,57 @@ class SimulationEngine:
             "efficiency": 0,
             "aiActive": False
         }
+
+    def get_grid_overview(self) -> GridOverview:
+        # 1. Calculate Road Stats
+        roads: List[RoadOverview] = []
+        
+        # Define all lanes (H0-H4, V0-V4)
+        all_lanes = [f"H{i}" for i in range(5)] + [f"V{i}" for i in range(5)]
+        
+        lane_congestions = {}
+        
+        for lane_id in all_lanes:
+            vehicles = self._get_vehicles_in_lane(lane_id)
+            count = len(vehicles)
+            
+            # Normalize: 3 vehicles = 1.0 congestion (aggressive for demo)
+            congestion = min(1.0, count / 3.0)
+            lane_congestions[lane_id] = congestion
+            
+            status = "optimal"
+            if congestion >= 0.75:
+                status = "congested"
+            elif congestion >= 0.5:
+                status = "moderate"
+                
+            roads.append(RoadOverview(laneId=lane_id, congestion=round(congestion, 2), flow=status))
+
+        # 2. Calculate Zone Stats
+        # Mapping definition
+        zones_map = {
+            "North Industrial": ["H0", "H1", "V0", "V4"], # Northern rim
+            "Central District": ["H2", "H3", "V2", "V3"], # Core
+            "West Harbor": ["V0", "V1", "H4"] # South-West
+        }
+        
+        zones: List[ZoneOverview] = []
+        for name, lanes in zones_map.items():
+            total_load = 0.0
+            for l in lanes:
+                total_load += lane_congestions.get(l, 0.0)
+            
+            avg_load = total_load / max(1, len(lanes))
+            
+            status = "optimal"
+            if avg_load >= 0.75:
+                status = "congested"
+            elif avg_load >= 0.5:
+                status = "moderate"
+                
+            zones.append(ZoneOverview(name=name, load=round(avg_load, 2), status=status))
+
+        return GridOverview(roads=roads, zones=zones)
 
 # Global instance
 simulation_engine = SimulationEngine()

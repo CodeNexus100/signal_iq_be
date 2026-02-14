@@ -70,3 +70,17 @@ class AIStatus(BaseModel):
 
 class AIToggle(BaseModel):
     enabled: bool
+
+class RoadOverview(BaseModel):
+    laneId: str
+    congestion: float
+    flow: str # "optimal", "moderate", "congested"
+
+class ZoneOverview(BaseModel):
+    name: str
+    load: float
+    status: str
+
+class GridOverview(BaseModel):
+    roads: List[RoadOverview]
+    zones: List[ZoneOverview]

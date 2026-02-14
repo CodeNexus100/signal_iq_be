@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from .simulation.engine import simulation_engine
-from .simulation.models import GridState, Intersection, SignalUpdate, AIToggle, AIStatus
+from .simulation.models import GridState, Intersection, SignalUpdate, AIToggle, AIStatus, GridOverview
 
 # Background task for simulation loop
 @asynccontextmanager
@@ -94,6 +94,11 @@ async def get_emergency_state():
 async def get_ai_status():
     """Returns the status of the AI Traffic Decision Engine"""
     return simulation_engine.get_ai_status()
+
+@app.get("/api/grid/overview", response_model=GridOverview)
+async def get_grid_overview():
+    """Returns aggregated grid information for visualization"""
+    return simulation_engine.get_grid_overview()
 
 
 @app.get("/")
