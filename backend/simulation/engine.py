@@ -4,7 +4,8 @@ from typing import Dict, List, Optional
 from .models import (
     Intersection, IntersectionMode, SignalState, Vehicle, GridState, SignalUpdate, 
     EmergencyVehicle, AIStatus, AIPrediction, AIRecommendation,
-    RoadOverview, ZoneOverview, GridOverview, IntersectionSummary, SignalDetails
+    RoadOverview, ZoneOverview, GridOverview, IntersectionSummary, SignalDetails,
+    TrafficPattern, PatternUpdateResult
 )
 from . import config
 
@@ -786,8 +787,39 @@ class SimulationEngine:
             
         return summary_list
 
+    def apply_traffic_pattern(self, pattern: str) -> int:
+        ns_green = 10
+        ew_green = 10
+        
+        if pattern == "rush_hour":
+            ns_green = 40
+            ew_green = 20
+        elif pattern == "night_mode":
+            ns_green = 10
+            ew_green = 10
+        elif pattern == "event":
+            ns_green = 35
+            ew_green = 35
+        elif pattern == "holiday":
+            ns_green = 20
+            ew_green = 20
+        else:
+            return 0
             
-        return summary_list
+        count = 0
+        for intersection in self.intersections.values():
+            intersection.nsGreenTime = float(ns_green)
+            intersection.ewGreenTime = float(ew_green)
+            
+            # Reset timer based on current active phase
+            if intersection.nsSignal in [SignalState.GREEN, SignalState.YELLOW]:
+                 intersection.timer = float(ns_green)
+            else:
+                 intersection.timer = float(ew_green)
+            
+            count += 1
+            
+        return count
 
     def get_intersection_details(self, intersection_id: str) -> Optional[SignalDetails]:
         intersection = self.intersections.get(intersection_id)

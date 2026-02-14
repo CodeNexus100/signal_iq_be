@@ -99,3 +99,10 @@ class SignalDetails(BaseModel):
     flowRate: int
     pedestrianDemand: str
     aiEnabled: bool
+
+class TrafficPattern(BaseModel):
+    pattern: str # rush_hour, night_mode, event, holiday
+
+class PatternUpdateResult(BaseModel):
+    patternApplied: str
+    intersectionsUpdated: int
