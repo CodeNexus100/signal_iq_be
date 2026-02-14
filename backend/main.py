@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from .simulation.engine import simulation_engine
-from .simulation.models import GridState, Intersection, SignalUpdate, AIToggle, AIStatus, GridOverview, IntersectionSummary, SignalDetails, TrafficPattern, PatternUpdateResult
+from .simulation.models import GridState, Intersection, SignalUpdate, AIToggle, AIStatus, GridOverview, IntersectionSummary, SignalDetails, TrafficPattern, PatternUpdateResult, OptimizationResult
 
 # Background task for simulation loop
 @asynccontextmanager
@@ -70,6 +70,12 @@ async def set_traffic_pattern(pattern: TrafficPattern):
     """Applies a global traffic pattern to all intersections"""
     count = simulation_engine.apply_traffic_pattern(pattern.pattern)
     return {"patternApplied": pattern.pattern, "intersectionsUpdated": count}
+
+@app.post("/api/signals/optimize-all", response_model=OptimizationResult)
+async def optimize_all_signals():
+    """Triggers immediate AI optimization for all intersections"""
+    count = simulation_engine.force_ai_optimization()
+    return {"optimized": count, "status": "success"}
 
 @app.post("/api/signals/ai")
 async def toggle_ai_mode(toggle: AIToggle):

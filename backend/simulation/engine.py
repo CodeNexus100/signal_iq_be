@@ -5,7 +5,7 @@ from .models import (
     Intersection, IntersectionMode, SignalState, Vehicle, GridState, SignalUpdate, 
     EmergencyVehicle, AIStatus, AIPrediction, AIRecommendation,
     RoadOverview, ZoneOverview, GridOverview, IntersectionSummary, SignalDetails,
-    TrafficPattern, PatternUpdateResult
+    TrafficPattern, PatternUpdateResult, OptimizationResult
 )
 from . import config
 
@@ -821,6 +821,14 @@ class SimulationEngine:
             
         return count
 
+    def force_ai_optimization(self) -> int:
+        count = 0
+        for intersection in self.intersections.values():
+            # Trigger existing logic
+            self._optimize_signals(intersection)
+            count += 1
+        return count
+
     def get_intersection_details(self, intersection_id: str) -> Optional[SignalDetails]:
         intersection = self.intersections.get(intersection_id)
         if not intersection:
@@ -874,6 +882,18 @@ class SimulationEngine:
             pedestrianDemand="Low", # Hardcoded for now
             aiEnabled=(intersection.mode == IntersectionMode.AI_OPTIMIZED)
         )
+
+
+    def force_ai_optimization(self) -> int:
+        count = 0
+        for intersection in self.intersections.values():
+            intersection.mode = IntersectionMode.AI_OPTIMIZED
+            # Reset timings to a "smart" default? Or let the next update loop handle it?
+            # Let's set a reasonable default for immediate feedback
+            intersection.nsGreenTime = 25.0
+            intersection.ewGreenTime = 25.0
+            count += 1
+        return count
 
 # Global instance
 simulation_engine = SimulationEngine()

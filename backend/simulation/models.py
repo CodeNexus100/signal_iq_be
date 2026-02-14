@@ -106,3 +106,7 @@ class TrafficPattern(BaseModel):
 class PatternUpdateResult(BaseModel):
     patternApplied: str
     intersectionsUpdated: int
+
+class OptimizationResult(BaseModel):
+    optimized: int
+    status: str
