@@ -1,13 +1,19 @@
 import random
 import time
 from typing import Dict, List, Optional
-from .models import Intersection, IntersectionMode, SignalState, Vehicle, GridState, SignalUpdate, EmergencyVehicle
+from .models import (
+    Intersection, IntersectionMode, SignalState, Vehicle, GridState, SignalUpdate, 
+    EmergencyVehicle, AIStatus, AIPrediction, AIRecommendation
+)
 
 class SimulationEngine:
     def __init__(self):
         self.intersections: Dict[str, Intersection] = {}
         self.vehicles: List[Vehicle] = []
         self.emergency_vehicle: Optional[EmergencyVehicle] = None
+        self.ai_status: Optional[AIStatus] = None
+        self._last_ai_update = 0.0
+        self.ai_mode = False # Global AI mode state
         self._initialize_grid()
         self._initialize_vehicles()
 
@@ -65,8 +71,11 @@ class SimulationEngine:
     def update(self, dt: float):
         self._update_signals(dt)
         self._update_vehicles(dt)
-        if self.emergency_vehicle and self.emergency_vehicle.active:
+        if self.emergency_vehicle is not None and self.emergency_vehicle.active:
             self._update_emergency_vehicle(dt)
+        
+        # Run AI Decision Engine (every tick for now, or throttle)
+        self._run_ai_decision_engine()
 
     def _update_signals(self, dt: float):
         for intersection in self.intersections.values():
@@ -76,6 +85,200 @@ class SimulationEngine:
             intersection.timer -= dt
             if intersection.timer <= 0:
                 self._switch_signal_phase(intersection)
+
+    def _calculate_congestion_score(self, lane_id: str, intersection_id: str) -> float:
+        # Score = count + waiting * 2
+        count: int = 0
+        waiting: int = 0
+        
+        # Intersection Pos
+        intersection = self.intersections.get(intersection_id)
+        if not intersection: return 0.0
+        
+        # Determine detection zone (radius)
+        # We need the pos of the intersection relative to the lane
+        # Reuse logic from density calc or simplify
+        # For prototype: Just count vehicles on the lane within 100 distance of intersection?
+        
+        # Actually, let's just count all vehicles on the lane segment
+        # In this grid, a lane spans the whole row/col, but we only care about the segment approaching this intersection
+        
+        # Simplify: Count all vehicles on the laneId that are "approaching" and within reasonable distance
+        # Lane H0 -> I-101 (0.0), I-102 (100.0), etc.
+        # Vehicle on H0 at 50.0 is between 101 and 102. Approaching 102 (East) or 101 (West)
+        
+        # User spec: "congestion_score = number_of_vehicles_on_lane + waiting_vehicles_near_intersection * 2"
+        # "number_of_vehicles_on_lane" implies the whole lane? Or just the approach?
+        # Let's use the density logic: Vehicles within radius 30.0 of intersection
+        
+        radius = 50.0 # larger radius
+        
+        idx = int(intersection_id.split("-")[1]) - 101
+        row = idx // 5
+        col = idx % 5
+        
+        int_h_pos = col * 100.0
+        int_v_pos = row * 100.0
+        
+        for v in self.vehicles:
+            if v.laneId == lane_id:
+                # Check distance
+                dist = 9999.0
+                if "H" in lane_id:
+                    dist = abs(v.position - int_h_pos)
+                else:
+                    dist = abs(v.position - int_v_pos)
+                    
+                if dist < radius:
+                    count += 1
+                    if v.speed < 1.0:
+                        waiting += 1
+                        
+        return count + (waiting * 2)
+
+    def _run_ai_decision_engine(self):
+        # 1. Aggregate Congestion
+        total_ns_score = 0
+        total_ew_score = 0
+        
+        max_lane_score = -1
+        max_lane_id = "None"
+        
+        for intersection in self.intersections.values():
+            if intersection.mode != IntersectionMode.AI_OPTIMIZED:
+                continue
+                
+            idx = int(intersection.id.split("-")[1]) - 101
+            row = idx // 5
+            col = idx % 5
+            
+            h_lane = f"H{row}"
+            v_lane = f"V{col}"
+            
+            ew_score = self._calculate_congestion_score(h_lane, intersection.id)
+            ns_score = self._calculate_congestion_score(v_lane, intersection.id)
+            
+            total_ew_score += ew_score
+            total_ns_score += ns_score
+            
+            if ew_score > max_lane_score:
+                max_lane_score = ew_score
+                max_lane_id = f"East-West ({h_lane} @ {intersection.id})"
+            if ns_score > max_lane_score:
+                max_lane_score = ns_score
+                max_lane_id = f"North-South ({v_lane} @ {intersection.id})"
+
+        # 2. Decision Logic
+        recommended = "Balanced"
+        green_increase = 0
+        efficiency = 0
+        
+        # Global decision for now, or per intersection?
+        # "If North-South congestion > East-West ... nsGreenTime += 5" implies global shift or per intersection.
+        # Implementation plan said "Update Signals: Apply ... for all AI-mode intersections" -> Global Policy.
+        
+        if total_ns_score > total_ew_score:
+            recommended = "North-South"
+            green_increase = 5
+            efficiency = int((total_ns_score - total_ew_score) * 2) # Arbitrary metric
+        elif total_ew_score > total_ns_score:
+            recommended = "East-West"
+            green_increase = 5
+            efficiency = int((total_ew_score - total_ns_score) * 2)
+        
+        # 3. Apply changes (Throttled? optimization rules say "Run every tick", but updating timer every tick is chaotic)
+        # engine.py _optimize_signals handles this during phase switch.
+        # But user request says "Outputs: updated signal timings".
+        # Let's update the *target* green times in the intersections, so next cycle picks them up.
+        # We should NOT increment indefinitely every tick. 
+        # We need a stable target.
+        # Let's treat "nsGreenTime += 5" as "Limit towards max".
+        # Actually, if we add 5 every tick, it explodes.
+        # This logic is likely meant to be "Per Cycle" or "Throttled".
+        # I will apply it here but carefully. 
+        # Let's simply update the stored greenTimes using the logic from _optimize_signals but globally.
+        
+        # Wait, the user prompt says:
+        # "If North-South congestion > East-West congestion: nsGreenTime += 5"
+        # This sounds like an incremental adjustment step.
+        # I will apply this ONLY if we haven't maxed out, and maybe with a small probability or only on certain triggers?
+        # "Run the AI engine every simulation tick."
+        # If I add 5 every tick (0.05s), in 1 second I add 100 seconds. That's wrong.
+        # I will assume this decision engine sets the STRATEGY, and the strategy is applied periodically.
+        # OR, I interpret "nsGreenTime += 5" as "Desired Green Time is Base + 5".
+        
+        # Let's stick to the previous implementation: _optimize_signals does the adjustment during phase switch.
+        # Here we just REPORT the status.
+        # INVALIDATING previous _optimize_signals?
+        # User said "Do NOT create new simulation loops. Attach this engine to the existing update loop."
+        # And "Outputs: updated signal timings".
+        
+        # OK, I will modify `_optimize_signals` to USE this global logic, or make this function update them?
+        # I'll make this function update them, but ONLY occasionally.
+        # Let's use a counter or timestamp.
+        
+        # BETTER: Calculate the TARGET and nudge towards it.
+        # Or just let _optimize_signals call this status?
+        
+        # Let's make this function just UPDATE STATUS for now, 
+        # AND apply the nudges purely to the intersection GreenTime attributes?
+        # If I do it every tick, I must act slowly. 0.05s is too fast.
+        
+        # Re-reading: "Run ... every simulation tick."
+        # "If NS > EW: nsGreen += 5".
+        # I'll assume this is "If we are in this state, we *want* +5 more than current".
+        # I will implement a cooldown. Update signals every 5 seconds?
+        
+       # For prototype simplicity:
+        # The AI Engine RUNS every tick to monitor.
+        # It UPDATES signals only every 1.0s or 5.0s.
+        
+        current_time = time.time()
+        if not hasattr(self, "_last_ai_update"):
+            self._last_ai_update = 0
+            
+        if current_time - self._last_ai_update > 2.0: # 2 second update interval
+            self._last_ai_update = current_time
+            
+            for intersection in self.intersections.values():
+                 if intersection.mode == IntersectionMode.AI_OPTIMIZED:
+                     if recommended == "North-South":
+                         intersection.nsGreenTime = min(60.0, intersection.nsGreenTime + 1.0) # Slow drifting
+                         intersection.ewGreenTime = max(10.0, intersection.ewGreenTime - 1.0)
+                     elif recommended == "East-West":
+                         intersection.ewGreenTime = min(60.0, intersection.ewGreenTime + 1.0)
+                         intersection.nsGreenTime = max(10.0, intersection.nsGreenTime - 1.0)
+
+        # 4. Global Status
+        # Determine strict congestion level
+        level = "Low"
+        if max_lane_score > 10: level = "Medium"
+        if max_lane_score > 20: level = "High"
+
+        rec_action = "Monitor"
+        rec_value = "--"
+        
+        if recommended == "North-South":
+             rec_action = "Extend North-South Green"
+             rec_value = f"+{green_increase}s"
+        elif recommended == "East-West":
+             rec_action = "Extend East-West Green"
+             rec_value = f"+{green_increase}s"
+
+        self.ai_status = AIStatus(
+            congestionLevel=level,
+            prediction=AIPrediction(
+                location=max_lane_id if max_lane_score > 5 else "Grid Optimal",
+                time=int(max(0.0, 10.0 - efficiency/10.0)) # Mock logic
+            ),
+            recommendation=AIRecommendation(
+                action=rec_action,
+                value=rec_value
+            ),
+            efficiency=efficiency,
+            aiActive=self.ai_mode,
+            timestamp=current_time
+        )
 
     def _calculate_density(self, intersection_id: str):
         # Map I-101 (index 1) to row 0, col 0
@@ -97,8 +300,8 @@ class SimulationEngine:
             
             radius = 30.0 # Detection radius
             
-            ns_load = 0
-            ew_load = 0
+            ns_load: int = 0
+            ew_load: int = 0
             
             for v in self.vehicles:
                 if v.laneId == h_lane_id:
@@ -423,6 +626,7 @@ class SimulationEngine:
         return intersection
 
     def set_ai_mode(self, enabled: bool):
+        self.ai_mode = enabled
         new_mode = IntersectionMode.AI_OPTIMIZED if enabled else IntersectionMode.FIXED
         for intersection in self.intersections.values():
             intersection.mode = new_mode
@@ -446,22 +650,23 @@ class SimulationEngine:
         print("Emergency Vehicle Started")
 
     def stop_emergency(self):
-        if not self.emergency_vehicle:
+        if self.emergency_vehicle is None:
             return
 
         self.emergency_vehicle.active = False
         # Restore all intersections to previous mode (FIXED for now)
         for iid in self.emergency_vehicle.route:
-            if iid in self.intersections:
-                    # If still in override, reset
-                    if self.intersections[iid].mode == IntersectionMode.EMERGENCY_OVERRIDE:
-                        self.intersections[iid].mode = IntersectionMode.FIXED
+            # We must verify intersections exist and emergency_vehicle is not None (checked above)
+            if iid in self.intersections and self.emergency_vehicle:
+                # If still in override, reset
+                if self.intersections[iid].mode == IntersectionMode.EMERGENCY_OVERRIDE:
+                    self.intersections[iid].mode = IntersectionMode.FIXED
         
         self.emergency_vehicle = None
         print("Emergency Vehicle Stopped")
 
     def _update_emergency_vehicle(self, dt: float):
-        if not self.emergency_vehicle:
+        if self.emergency_vehicle is None:
             return
             
         ev = self.emergency_vehicle
@@ -502,6 +707,20 @@ class SimulationEngine:
         # End emergency only when vehicle leaves the grid (visual range)
         if ev.position > 650.0:
             self.stop_emergency()
+
+    def get_ai_status(self) -> AIStatus:
+        if self.ai_status:
+             # Refresh timestamp?
+             return self.ai_status
+        
+        # Default if not run yet
+        return {
+            "congestionLevel": "Low",
+            "prediction": {"location": "--", "time": 0},
+            "recommendation": {"action": "Monitor", "value": "--"},
+            "efficiency": 0,
+            "aiActive": False
+        }
 
 # Global instance
 simulation_engine = SimulationEngine()

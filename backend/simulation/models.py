@@ -52,5 +52,21 @@ class SignalUpdate(BaseModel):
     ewGreenTime: Optional[float] = None
     mode: Optional[IntersectionMode] = None
 
+class AIPrediction(BaseModel):
+    location: str
+    time: int
+
+class AIRecommendation(BaseModel):
+    action: str
+    value: str
+
+class AIStatus(BaseModel):
+    congestionLevel: str
+    prediction: AIPrediction
+    recommendation: AIRecommendation
+    efficiency: int
+    aiActive: bool
+    timestamp: Optional[float] = 0.0
+
 class AIToggle(BaseModel):
     enabled: bool
