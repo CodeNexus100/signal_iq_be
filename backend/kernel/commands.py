@@ -21,7 +21,6 @@ class UpdateSignalCommand(Command):
                 intersection.ewGreenTime = self.updates.ewGreenTime
             if self.updates.mode is not None:
                 intersection.mode = self.updates.mode
-        return intersection
 
 class SetGlobalAIModeCommand(Command):
     def __init__(self, enabled: bool):

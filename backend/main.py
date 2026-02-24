@@ -5,8 +5,8 @@ from typing import List
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from backend.application.kernel import SimulationKernel
-from backend.application.commands import (
+from backend.kernel.simulation_kernel import SimulationKernel
+from backend.kernel.commands import (
     UpdateSignalCommand, SetGlobalAIModeCommand, ApplyTrafficPatternCommand,
     StartEmergencyCommand, StopEmergencyCommand
 )
@@ -148,8 +148,9 @@ async def get_grid_overview():
 async def get_intersections():
     """Returns a list of all intersections with their status"""
     summary = []
-    for i_id in sorted(kernel.state.intersections.keys()):
-        summary.append({"id": i_id, "name": f"Intersection {i_id}", "status": "active"})
+    if kernel.state.intersections:
+        for i_id in sorted(kernel.state.intersections.keys()):
+            summary.append({"id": i_id, "name": f"Intersection {i_id}", "status": "active"})
     return summary
 
 @app.get("/")
