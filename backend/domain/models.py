@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pydantic import BaseModel
 
 class SignalState(str, Enum):
@@ -41,6 +41,8 @@ class EmergencyVehicle(BaseModel):
     active: bool
     current_target_index: int = 0
     type: str = "emergency"
+
+# API/Response Models
 
 class GridState(BaseModel):
     intersections: List[Intersection]
