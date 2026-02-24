@@ -1,8 +1,11 @@
 from typing import List, Dict, Optional
-from pydantic import BaseModel
-from .models import Intersection, Vehicle, EmergencyVehicle
+from pydantic import BaseModel, ConfigDict
+from backend.domain.models import Intersection, Vehicle, EmergencyVehicle
+from backend.domain.graph import RoadNetwork
 
 class SimulationState(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     tick_id: int = 0
     time: float = 0.0
     intersections: Dict[str, Intersection] = {}
@@ -10,5 +13,5 @@ class SimulationState(BaseModel):
     emergency_vehicle: Optional[EmergencyVehicle] = None
     ai_enabled: bool = False
 
-    # Random state placeholder if we were to serialize it
-    # random_state: str = ""
+    # Graph based structure
+    road_network: Optional[RoadNetwork] = None

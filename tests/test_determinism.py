@@ -1,5 +1,5 @@
 import unittest
-from backend.application.kernel import SimulationKernel
+from backend.kernel.simulation_kernel import SimulationKernel
 
 class TestDeterminism(unittest.TestCase):
     def test_determinism(self):

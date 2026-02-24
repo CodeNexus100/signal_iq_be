@@ -24,13 +24,17 @@ class Intersection(BaseModel):
 
 class Vehicle(BaseModel):
     id: str
-    laneId: str
+    laneId: str # Legacy ID, to be deprecated in favor of edge_id
     laneType: str # "horizontal" or "vertical"
     direction: str # "north", "south", "east", "west"
     position: float
     speed: float
-    target_speed: float = 10.0 # Speed to resume after stopping
+    target_speed: float = 10.0
     type: str # "car", "truck"
+
+    # Graph-based fields
+    edge_id: Optional[str] = None # Tuple string or ID
+    progress: float = 0.0 # 0.0 to 1.0 along edge
 
 class EmergencyVehicle(BaseModel):
     id: str
